@@ -1,0 +1,88 @@
+# Sezi Server — Cloudflare Worker (self-host şablonu)
+#
+# Bu dosya "Deploy to Cloudflare" butonu için parametriktir: kaynak ID'leri
+# (D1/KV) buton akışında OTOMATİK oluşturulup buraya yazılır. CLI ile kuruyorsan
+# README'deki 3 komutla kaynakları oluşturup ID'leri işle.
+#
+# PREBUILT: `build/` klasörü derlenmiş WASM içerir → deploy için Rust GEREKMEZ
+# ([build] bölümü bilinçli yok; `wrangler deploy` yalnız upload eder).
+
+name = "sezi-server28"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-05-01"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# D1 — sunucu veritabanı (üyeler/davetler/kuyruk-metadata; içerik E2E-şifreli,
+# sunucu OKUYAMAZ). Şema ilk istekte otomatik kurulur (self-migration).
+[[d1_databases]]
+binding = "DB"
+database_name = "sezi"
+# PLACEHOLDER: "Deploy to Cloudflare" butonu yeni D1 oluşturup bu ID'yi kendisi
+# günceller (butonun parser'ı alanın MEVCUT olmasını ister — CF dokümanı).
+# CLI ile kuruyorsan: `wrangler d1 create sezi` → çıktıdaki gerçek id'yi yaz.
+database_id = "718c577f-6fbb-499a-b84e-6a34d5e18e21"
+migrations_dir = "./migrations"
+
+# R2 (medya) — BİLİNÇLİ KAPALI ("Lite" kurulum): R2, Cloudflare hesabında
+# abonelik-etkinleştirme (kart doğrulaması) istiyor; ilk kurulum kartsız olsun
+# diye binding yok. Mesajlaşma/grup/arama TAM çalışır; fotoğraf/dosya paylaşımı
+# kapalı görünür. SONRADAN AÇMAK (kod/redeploy GEREKMEZ):
+#   1. CF dashboard → R2 → etkinleştir (10 GB'a kadar ücretsiz) → "sezi-media"
+#      adında bucket oluştur.
+#   2. Workers & Pages → sezi-server → Settings → Bindings → Add → R2 bucket →
+#      Variable name: MEDIA, bucket: sezi-media → Deploy.
+#   3. Bitti — uygulama özelliği kendiliğinden gösterir (/capabilities dinamik).
+# (İstersen aşağıyı açıp CLI ile de verebilirsin:)
+# [[r2_buckets]]
+# binding = "MEDIA"
+# bucket_name = "sezi-media"
+
+# KV (hız-limiti) — BİLİNÇLİ YOK (deploy-ekranı sadeliği + isim-çakışması):
+# binding yokken sunucu hız-limitlerini atlar (kapalı-üyelik modelinde davet
+# zaten kapı; fail-open kültürü). İstersen sonradan aç: KV namespace oluştur →
+# Worker → Settings → Bindings → KV → Variable name: RATE_LIMIT → Deploy.
+# [[kv_namespaces]]
+# binding = "RATE_LIMIT"
+# id = "..."
+
+# Durable Objects — kullanıcı-başına gelen-kutusu + oda-başına eklenti-log'u.
+# Deploy'da otomatik oluşur, ön-hazırlık gerekmez.
+[[durable_objects.bindings]]
+name = "USER_INBOX"
+class_name = "UserInbox"
+
+[[durable_objects.bindings]]
+name = "PLUGIN_ROOM_LOG"
+class_name = "PluginRoomLog"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["UserInbox"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["PluginRoomLog"]
+
+# [triggers]/cron BİLİNÇLİ YOK: CF free-planı hesap-başına cron sayısını
+# sınırlar (aynı hesapta 2. sunucu cron-adımında hata alıyordu). Bakım
+# (temizlik + teslim-tekrar-drain'i) cron'suz da çalışır: sunucu bunları
+# istek-sırtında kendisi yürütür (lazy-maintenance, src/maintenance.rs).
+# İstersen cron da ekleyebilirsin (dashboard → Settings → Triggers) —
+# eklersen lazy-yol kendiliğinden uyur, çift-koşum olmaz.
+
+# [vars] BİLİNÇLİ YOK — hepsi kodda güvenli default'lu (deploy-ekranı "isim +
+# Onayla"ya insin diye): ENV=prod (fail-secure) · JWT_ISSUER="sezi-server" ·
+# TURN_MONTHLY_CAP=5000. İnce-ayar istersen dashboard → Settings → Variables:
+#   ENV, JWT_ISSUER, TURN_MONTHLY_CAP, FCM_PROJECT_ID (Android push için;
+#   yanında FCM_SERVICE_ACCOUNT secret'ı gerekir — push'u uygulama içinden de
+#   açabilirsin: Sunucu → Kullanım → Bildirimler).
+
+# ── Secret'lar — HEPSİ OPSİYONEL ──────────────────────────────────────────────
+# JWT_SIGNING_KEY / ADMIN_INVITE_KEY: girilmezse sunucu İLK AÇILIŞTA kendisi
+#   üretir ve D1'de saklar (self-provisioning). Kendi anahtarını yönetmek istersen
+#   `wrangler secret put JWT_SIGNING_KEY` (PKCS8 PEM Ed25519) — env HER ZAMAN kazanır.
+# TURN_KEY_ID / TURN_API_TOKEN: CF Realtime TURN (opsiyonel; yoksa arama LAN/STUN).
+# FCM_SERVICE_ACCOUNT: Firebase service-account JSON (opsiyonel; Android push).
+# CF_API_TOKEN / CF_ACCOUNT_ID: kullanım paneli "faturayla birebir" modu —
+#   bunları uygulama içinden de girebilirsin (Sunucu → Kullanım → CF Analytics).
